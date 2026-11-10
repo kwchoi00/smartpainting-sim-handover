@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════════════════
+#  드리프트 실험 전용 — **긴 직선 론지 통로**
+#
+#  도면 월드(ship_block_cad_world)는 횡프레임 사이가 5.91 m 뿐이라
+#  로봇(4.43 m)이 앞뒤로 0.9 m 밖에 못 간다. 왕복으로 거리를 벌면
+#  **스케일 오차가 상쇄돼** 오도메트리가 실제보다 좋아 보인다
+#  (실측: 왕복 2.9 m 에서 오도메트리 18 mm — 편도였다면 훨씬 컸다).
+#
+#  드리프트는 **한 방향으로 길게** 가야 제대로 드러난다. 그래서 이 월드는
+#  론지만 40 m 깔고 횡프레임·측벽을 뺐다. 론지 제원은 실 도면과 같다.
+#
+#  단위: m
+# ═══════════════════════════════════════════════════════════════
+
+world_name: ship_block_drift
+
+plate:
+  length: 40.0       # X — 주행 방향. 편도 35 m 까지 잴 수 있다
+  width:  6.0        # Y
+  thickness: 0.02
+  raised: false
+  height: 0.0
+
+longi:               # 실 도면 T-bar 450x150 과 같은 제원
+  enabled: true
+  type: T
+  count: 6
+  pitch: 0.845       # 바퀴부 궤간이 여기 묶인다
+  web_height: 0.432  # + flange_thickness = 0.450
+  web_thickness: 0.012
+  flange_width: 0.15
+  flange_thickness: 0.018
+
+transverse:          # **끈다** — 길게 가는 게 목적이다
+  enabled: false
+  count: 0
+  height: 3.1
+  thickness: 0.015
+  manhole_width: 0.8
+  manhole_height: 1.0
+
+side_wall:
+  enabled: false
+  height: 2.5
+  thickness: 0.02
+
+robot_spawn:         # 론지 두 개 사이 중점 = y 0
+  x: -18.0
+  y: 0.0
+  yaw: 0.0

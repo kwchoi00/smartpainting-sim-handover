@@ -1,0 +1,353 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo Harmonic (gz-sim 8) 플러그인 및 센서 정의.
+
+  퍼블리시되는 gz 토픽:
+    /cmd_vel        (구독)  geometry_msgs/Twist    ← 조종 입력 (바퀴부 주행)
+    /body_lift      (구독)  std_msgs/Float64       ← 몸체부 상하 [m]
+    /body_turn      (구독)  std_msgs/Float64       ← 몸체부 회전 [rad]
+    /front_lift /rear_lift  std_msgs/Float64       ← 전후단부 상하 [m], 0 = 바닥
+    /front_turn /rear_turn  std_msgs/Float64       ← 전후단부 회전 [rad]
+    /rail_cmd       (구독)  std_msgs/Float64       ← 리니어축 위치 [m], 0 = 행정 중심
+    /arm_j1 .. /arm_j6      std_msgs/Float64       ← 팔 6축 위치 [rad]
+    /scissor/traj   (구독)  trajectory_msgs/JointTrajectory
+                            ← 시저 링키지 관절 궤적. **scissor_driver 노드가 낸다.**
+                              사람이 쏠 일은 없다.
+    /odom           (발행)  gz.msgs.Odometry       ← 휠 오도메트리 (추정용)
+    /ground_truth   (발행)  gz.msgs.Odometry       ← 참값 (평가 전용, 알고리즘에 넣지 말 것)
+    /imu            (발행)  gz.msgs.IMU
+    /joint_states   (발행)  sensor_msgs/JointState ← 상하·회전·리니어축 엔코더
+
+  ⚠ DiffDrive 의 TF 는 /tf_gz 로 빼서 기본적으로 브리지하지 않는다.
+    EKF(robot_localization)가 odom→base_footprint 를 소유해야 하므로
+    두 곳에서 같은 TF 를 쏘면 충돌한다. sim.launch.py 의 publish_gz_tf 인자로 제어.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ─── 마찰 설정 ─────────────────────────────────────────── -->
+  <xacro:macro name="link_friction" params="link mu">
+    <gazebo reference="${link}">
+      <mu1>${mu}</mu1>
+      <mu2>${mu}</mu2>
+      <kp>1000000.0</kp>
+      <kd>100.0</kd>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ─── 관절 위치 제어 ────────────────────────────────────── -->
+  <xacro:macro name="pos_ctrl" params="joint topic p i d cmd init:=0">
+    <gazebo>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>${joint}</joint_name>
+        <topic>${topic}</topic>
+        <p_gain>${p}</p_gain><i_gain>${i}</i_gain><d_gain>${d}</d_gain>
+        <cmd_max>${cmd}</cmd_max><cmd_min>${-cmd}</cmd_min>
+        <!-- 지령이 오기 전까지의 목표. 관절값 0 이 쓸 수 없는 자세인 축에만 준다.
+             ⚠ 0 일 때는 **원소 자체를 넣지 않는다** — 아래 검증 참조. -->
+        <xacro:if value="${init != 0}">
+          <initial_position>${init}</initial_position>
+        </xacro:if>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:macro name="crawler_gazebo">
+
+    <!-- 구동륜: 강재 론지 플랜지 위. 마찰을 높게 잡는다 -->
+    <xacro:macro name="wheel_friction" params="side i">
+      <xacro:if value="${i &lt; drive_wheel_n}">
+        <xacro:link_friction link="${side}${i}_wheel_link" mu="1.2"/>
+        <xacro:wheel_friction side="${side}" i="${i+1}"/>
+      </xacro:if>
+    </xacro:macro>
+    <xacro:wheel_friction side="l" i="0"/>
+    <xacro:wheel_friction side="r" i="0"/>
+
+    <!-- 끝단 접지 롤러: 굴러가야 하므로 마찰을 낮게. 구동하지 않는다. -->
+    <xacro:macro name="roller_friction" params="prefix">
+      <xacro:link_friction link="${prefix}_fl_roller_link" mu="0.4"/>
+      <xacro:link_friction link="${prefix}_fr_roller_link" mu="0.4"/>
+      <xacro:link_friction link="${prefix}_bl_roller_link" mu="0.4"/>
+      <xacro:link_friction link="${prefix}_br_roller_link" mu="0.4"/>
+    </xacro:macro>
+    <xacro:roller_friction prefix="front"/>
+    <xacro:roller_friction prefix="rear"/>
+
+    <!-- ─── 상하 / 회전 / 리니어축 ──────────────────────────
+         q=0 이 **론지 주행 자세**다 (끝단부가 바닥에 닿은 상태).
+         끝단부를 들어올리려면 양수를 준다:
+
+         **몸체부를 론지와 수직으로 돌리는 순서**
+         전후단부는 몸체부에 매달려 있어서 **회전 지령을 주지 않아도 같이 돈다.**
+         (/front_turn /rear_turn 은 몸체부에 대한 **상대** 각도다. 0 으로 두면
+          전후단부가 몸체부와 나란히 = 론지와 수직을 유지한다.)
+
+           1) /front_lift /rear_lift → 0.50   전후단부를 들어 론지를 넘긴다
+           2) /body_turn → 1.5708             몸체부 90°, 전후단부도 같이 돈다
+           3) /front_lift /rear_lift → 0.450  **론지 상면 높이**로 내린다
+
+         ⚠ 3)에서 0 (통로 바닥)까지 내리면 안 된다. 전후단부는 길이 1.05 m 라
+           론지 pitch 0.845 를 가로지르면 **반드시 론지를 하나 이상 깔고 앉는다.**
+           바닥까지 내리라고 하면 론지에 걸터앉아 로봇 전체가 370 mm 들리고
+           바퀴부가 론지에서 뜬다 (실측). 수직 자세에서 전후단부의 접지면은
+           통로 바닥이 아니라 **론지 상면**이고, 그 높이가 end_drop(0.450)이다.
+
+           론지와 나란한 주행 자세에서만 0 (통로 바닥)이 맞다.
+
+         ⚠ 전후단부 상하축은 로봇 무게 상당을 받는다 (전후단부가 바닥을 딛고
+           몸체부를 떠받치는 구조). 게인이 낮으면 주저앉는다. -->
+    <xacro:pos_ctrl joint="body_lift_joint"  topic="/body_lift"
+                    p="200000" i="200" d="20000" cmd="20000"/>
+    <xacro:pos_ctrl joint="body_turn_joint"  topic="/body_turn"
+                    p="${body_turn_p}" i="${body_turn_i}" d="${body_turn_d}"
+                    cmd="${body_turn_cmd_max}"/>
+    <xacro:pos_ctrl joint="front_lift_joint" topic="/front_lift"
+                    p="400000" i="400" d="40000" cmd="40000"/>
+    <xacro:pos_ctrl joint="rear_lift_joint"  topic="/rear_lift"
+                    p="400000" i="400" d="40000" cmd="40000"/>
+    <xacro:pos_ctrl joint="front_turn_joint" topic="/front_turn"
+                    p="${turn_p}" i="${turn_i}" d="${turn_d}" cmd="${turn_cmd_max}"/>
+    <xacro:pos_ctrl joint="rear_turn_joint"  topic="/rear_turn"
+                    p="${turn_p}" i="${turn_i}" d="${turn_d}" cmd="${turn_cmd_max}"/>
+    <xacro:pos_ctrl joint="carriage_joint"   topic="/rail_cmd"
+                    p="60000"  i="50"  d="4000"  cmd="4000"/>
+
+    <!-- ─── 팔 6축 (CRX-20iA/L) ──────────────────────────────
+         ⚠ arm_fixed=true (기본) 면 이 절이 통째로 빠진다 — 팔이 접은 자세로 굳어
+           관절도 제어기도 없다. 주행 실험에는 그게 맞다.
+         ⚠ 관절값 0 은 팔이 **곧게 선** 자세(플랜지 z ≈ 2.3 m)라 주행에 못 쓴다.
+           그래서 J2·J3·J5 는 initial_position 으로 **접은 자세**에서 시작한다.
+           지령을 안 주면 계속 그 자세로 서 있는다. -->
+    <xacro:unless value="${arm_fixed}">
+    <xacro:pos_ctrl joint="arm_j1_joint" topic="/arm_j1"
+                    p="${arm_p}" i="${arm_i}" d="${arm_d}" cmd="${arm_cmd_max}"/>
+    <xacro:pos_ctrl joint="arm_j2_joint" topic="/arm_j2" init="${arm_home_j2}"
+                    p="${arm_p}" i="${arm_i}" d="${arm_d}" cmd="${arm_cmd_max}"/>
+    <xacro:pos_ctrl joint="arm_j3_joint" topic="/arm_j3" init="${arm_home_j3}"
+                    p="${arm_p}" i="${arm_i}" d="${arm_d}" cmd="${arm_cmd_max}"/>
+    <xacro:pos_ctrl joint="arm_j4_joint" topic="/arm_j4"
+                    p="${arm_p*0.4}" i="${arm_i}" d="${arm_d*0.4}" cmd="${arm_cmd_max*0.4}"/>
+    <xacro:pos_ctrl joint="arm_j5_joint" topic="/arm_j5" init="${arm_home_j5}"
+                    p="${arm_p*0.4}" i="${arm_i}" d="${arm_d*0.4}" cmd="${arm_cmd_max*0.4}"/>
+    <xacro:pos_ctrl joint="arm_j6_joint" topic="/arm_j6"
+                    p="${arm_p*0.2}" i="${arm_i}" d="${arm_d*0.2}" cmd="${arm_cmd_max*0.2}"/>
+    </xacro:unless>
+
+    <!-- ─── 시저 링키지 (종동체) ────────────────────────────
+         X자 바는 하중을 받지 않고 상하축 행정을 **따라가기만** 한다.
+         `scissor_driver` 가 θ = asin(ext/(N·L)) 를 풀어 관절 궤적 하나로 쏘고,
+         조립체 안의 모든 바가 <axis> 부호로 ±θ / ±2θ 를 나눠 갖는다.
+
+         ⚠ mimic 관절이면 노드 없이 끝날 일이지만 **dartsim 이 mimic 을 지원하지
+           않는다** (bullet-featherstone 전용). 엔진을 바꾸면 접촉·마찰이 달라져
+           드리프트 측정이 무효가 되므로 종동 제어로 간다.
+
+         **왜 JointTrajectoryController 인가** — 관절마다 JointPositionController 를
+         다는 방법도 되고 성능도 같다 (실측 RTF 0.185 대 0.19 로 차이 없음).
+         궤적 제어기를 쓰는 이유는 성능이 아니라 **단순함**이다:
+         플러그인 1개, 브리지 토픽 1개, 지령 1개로 20관절이 **한 틱에 함께** 움직인다.
+         토픽을 나누면 조립체별로 도착 시점이 어긋나 X자가 잠깐 어긋나 보인다.
+
+         ⚠ 게인이 낮다. 종동체라 이겨야 할 하중이 바 자체 무게(0.6 kg)뿐이다.
+           특히 **d_gain 을 키우면 안 된다** — 관성 0.003 kg·m² 짜리 링크에
+           d=60 을 걸었더니 관절이 목표에서 최대 12도 못 미친 채 정지했다 (실측).
+           d=2 로 낮추니 전 행정 0.61도 이내로 붙는다.
+
+         ⚠ **<initial_position> 을 반드시 q=0 자세의 각도로 준다.** 0 으로 두면
+           시뮬 기동 후 scissor_driver 의 첫 지령이 오기까지 몇 초 동안 바가
+           **자유낙하**한다. 전후단부 바는 1 m 라 그 사이에 목표를 한참 지나쳐
+           넘어가고, 그 뒤엔 제어기가 붙어도 되돌아오지 못한다
+           (실측: 목표 40.7° 인데 112° 에서 정지).
+           q=0 은 스폰 자세이므로 각도가 도면값에서 그대로 나온다:
+               θ0 = asin(ext(0) / (N·L))
+
+         ⚠ 이 노드를 안 띄워도 시뮬은 정상 동작한다 — 바가 θ0 자세로 서 있을 뿐이다. -->
+    <xacro:macro name="scissor_gains" params="name p d cmd init">
+      <joint_name>${name}</joint_name>
+      <initial_position>${init}</initial_position>
+      <position_p_gain>${p}</position_p_gain>
+      <position_i_gain>${sc_i}</position_i_gain>
+      <position_d_gain>${d}</position_d_gain>
+      <position_cmd_max>${cmd}</position_cmd_max>
+      <position_cmd_min>${-cmd}</position_cmd_min>
+    </xacro:macro>
+
+    <xacro:macro name="scissor_joints" params="ns n k p d cmd th0">
+      <xacro:if value="${k &lt; n}">
+        <!-- 뿌리 바만 θ, 나머지는 2θ — scissor_driver 가 내는 값과 같은 규칙이다 -->
+        <xacro:scissor_gains name="${ns}_m${k}_scissor_joint" p="${p}" d="${d}" cmd="${cmd}"
+                             init="${th0 if k == 0 else 2*th0}"/>
+        <xacro:scissor_gains name="${ns}_p${k}_scissor_joint" p="${p}" d="${d}" cmd="${cmd}"
+                             init="${2*th0}"/>
+        <xacro:scissor_joints ns="${ns}" n="${n}" k="${k+1}" p="${p}" d="${d}" cmd="${cmd}"
+                              th0="${th0}"/>
+      </xacro:if>
+    </xacro:macro>
+
+    <gazebo>
+      <plugin filename="gz-sim-joint-trajectory-controller-system"
+              name="gz::sim::systems::JointTrajectoryController">
+        <topic>/scissor/traj</topic>
+        <!-- 몸체부 앞뒤 두 조 + 전후단부 두 조 = 시저 관절 전부 -->
+        <xacro:scissor_joints ns="body_sc" n="${body_sc_n}" k="0"
+                              p="${sc_body_p}" d="${sc_body_d}" cmd="${sc_body_cmd}"
+                              th0="${asin(body_sc_ext0 / (body_sc_n * body_sc_len))}"/>
+        <xacro:scissor_joints ns="front_sc" n="${end_sc_n}" k="0"
+                              p="${sc_end_p}" d="${sc_end_d}" cmd="${sc_end_cmd}"
+                              th0="${asin(end_sc_ext_hi / (end_sc_n * end_sc_len))}"/>
+        <xacro:scissor_joints ns="rear_sc"  n="${end_sc_n}" k="0"
+                              p="${sc_end_p}" d="${sc_end_d}" cmd="${sc_end_cmd}"
+                              th0="${asin(end_sc_ext_hi / (end_sc_n * end_sc_len))}"/>
+      </plugin>
+    </gazebo>
+
+    <!-- ─── 관절 엔코더 + 휠 엔코더 ──────────────────────────
+         상하·회전·리니어축은 **휠 오도메트리로 알 수 없다** (움직여도 바퀴가 안 구른다).
+         /ground_truth 는 평가 전용이므로 제어 루프에 쓰지 않는다.
+
+         **구동륜 26개(측당 13)의 관절각도 같이 낸다 = 휠 엔코더.**
+         이게 오도메트리의 가장 원초적인 측정값(회전량)이다.
+         거리는 각도 x 반경, 속도는 그 미분, 위치는 적분으로 나온다.
+         `/odom` 은 gz DiffDrive 가 이 회전량으로 이미 계산해 주는 값이고,
+         원시 회전량이 필요하면 여기 `position` 을 쓰면 된다. -->
+    <gazebo>
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher">
+        <topic>/joint_states</topic>
+        <!-- ⚠ joint_name 을 하나도 안 준다 = **모든 관절**을 낸다.
+             처음엔 필요한 것만 나열했는데, 그렇게 하면 gz 가 구동륜(l0..r7)을
+             빼고 냈다. 필터가 원시 회전량을 쓰려면 구동륜이 있어야 한다.
+             다 내도 부담이 없다.
+             ⚠ 시저 링키지 관절(*_scissor_joint)도 같이 나온다. `wheel_odom` 은
+               `_wheel_joint` 로 끝나는 것만 골라 쓰므로 섞이지 않는다. -->
+      </plugin>
+    </gazebo>
+
+    <!-- ─── 차동구동 (바퀴부 = 론지 주행) ──────────────────────
+         DiffDrive 는 left/right_joint 를 여러 개 받는다.
+         바퀴부 한쪽의 구동륜이 같이 도는 것을 그대로 표현한다.
+
+         ⚠ 각속도 명령은 사실상 무의미하다. 바퀴부는 폭 150 mm 론지 위에 있고
+           통로 폭도 695 mm 뿐이라 제자리 회전이 성립하지 않는다.
+           방향을 바꾸는 것은 **몸체부·전후단부의 회전축**이 할 일이다. -->
+    <gazebo>
+      <plugin filename="gz-sim-diff-drive-system"
+              name="gz::sim::systems::DiffDrive">
+        <xacro:macro name="wheel_joints" params="side tag i">
+          <xacro:if value="${i &lt; drive_wheel_n}">
+            <xacro:element xacro:name="${tag}">${side}${i}_wheel_joint</xacro:element>
+            <xacro:wheel_joints side="${side}" tag="${tag}" i="${i+1}"/>
+          </xacro:if>
+        </xacro:macro>
+        <xacro:wheel_joints side="l" tag="left_joint"  i="0"/>
+        <xacro:wheel_joints side="r" tag="right_joint" i="0"/>
+        <wheel_separation>${drive_gauge}</wheel_separation>
+        <wheel_radius>${wheel_radius}</wheel_radius>
+
+        <topic>/cmd_vel</topic>
+        <odom_topic>/odom</odom_topic>
+        <tf_topic>/tf_gz</tf_topic>
+        <frame_id>odom</frame_id>
+        <child_frame_id>base_footprint</child_frame_id>
+        <odom_publish_frequency>${odom_rate}</odom_publish_frequency>
+
+        <!-- 협소 통로 주행 속도 제한 -->
+        <max_linear_acceleration>1.0</max_linear_acceleration>
+        <min_linear_acceleration>-1.0</min_linear_acceleration>
+        <max_angular_acceleration>1.0</max_angular_acceleration>
+        <min_angular_acceleration>-1.0</min_angular_acceleration>
+        <max_linear_velocity>0.6</max_linear_velocity>
+        <min_linear_velocity>-0.6</min_linear_velocity>
+        <max_angular_velocity>0.5</max_angular_velocity>
+        <min_angular_velocity>-0.5</min_angular_velocity>
+      </plugin>
+    </gazebo>
+
+    <!-- ─── 참값 오도메트리 (평가 전용) ────────────────────── -->
+    <!--
+      OdometryPublisher 는 물리 엔진의 실제 모델 포즈에서 직접 뽑으므로
+      센서 잡음도 slip 도 섞이지 않은 참값이다. 추정 입력으로 절대 쓰지 말 것.
+
+      주의: gz 버전에 따라 월드 절대좌표가 아니라 **스폰 지점 기준 상대좌표**로
+      나올 수 있다. 드리프트 평가는 상대 궤적 비교라 어느 쪽이든 유효하지만,
+      절대좌표가 필요하면 첫 샘플로 초기 정렬(alignment)을 한 번 해줄 것.
+    -->
+    <gazebo>
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_frame>world</odom_frame>
+        <robot_base_frame>base_footprint</robot_base_frame>
+        <odom_topic>/ground_truth</odom_topic>
+        <tf_topic>/tf_gt_unused</tf_topic>
+        <odom_publish_frequency>${odom_rate}</odom_publish_frequency>
+        <dimensions>3</dimensions>
+      </plugin>
+    </gazebo>
+
+    <!-- ─── IMU ────────────────────────────────────────────── -->
+    <gazebo reference="imu_link">
+      <sensor name="imu_sensor" type="imu">
+        <topic>/imu</topic>
+        <update_rate>${imu_rate}</update_rate>
+        <always_on>true</always_on>
+        <gz_frame_id>imu_link</gz_frame_id>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${gyro_noise_stddev}</stddev>
+              <bias_mean>${gyro_bias_mean}</bias_mean>
+              <bias_stddev>${gyro_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${gyro_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${gyro_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></x>
+            <y><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${gyro_noise_stddev}</stddev>
+              <bias_mean>${gyro_bias_mean}</bias_mean>
+              <bias_stddev>${gyro_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${gyro_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${gyro_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></y>
+            <z><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${gyro_noise_stddev}</stddev>
+              <bias_mean>${gyro_bias_mean}</bias_mean>
+              <bias_stddev>${gyro_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${gyro_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${gyro_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${accel_noise_stddev}</stddev>
+              <bias_mean>${accel_bias_mean}</bias_mean>
+              <bias_stddev>${accel_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${accel_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${accel_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></x>
+            <y><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${accel_noise_stddev}</stddev>
+              <bias_mean>${accel_bias_mean}</bias_mean>
+              <bias_stddev>${accel_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${accel_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${accel_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></y>
+            <z><noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>${accel_noise_stddev}</stddev>
+              <bias_mean>${accel_bias_mean}</bias_mean>
+              <bias_stddev>${accel_bias_stddev}</bias_stddev>
+              <dynamic_bias_stddev>${accel_dyn_bias_stddev}</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>${accel_dyn_bias_tau}</dynamic_bias_correlation_time>
+            </noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </gazebo>
+
+  </xacro:macro>
+</robot>

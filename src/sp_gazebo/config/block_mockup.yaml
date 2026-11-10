@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════════════════════
+#  선박 블록 내부 — Grit 모사장치 축소 모형 스케일
+#
+#  ⚠ 전부 가정치. 실제 제작한 론지 축소 모형 치수로 교체할 것.
+#     특히 longi.pitch 와 longi.web_height 는 로봇이 통과 가능한지를
+#     직접 결정하므로 실측이 중요하다.
+#  단위: m
+# ═══════════════════════════════════════════════════════════════
+
+world_name: ship_block_mockup
+
+plate:
+  length: 8.0        # X — 주행 방향
+  width:  4.0        # Y
+  thickness: 0.02
+  # 플레이트 가장자리(추락 지점). 하방 초음파 실험의 대상.
+  raised: true       # true 면 바닥에서 띄워 실제 추락이 발생하게 함
+  height: 0.5        # raised 일 때 지면으로부터의 높이
+
+longi:               # 론지 (종방향 보강재) — X 방향으로 길게
+  enabled: true
+  type: T            # T = T바(양쪽 플랜지), L = ㄱ자(한쪽 플랜지)
+  count: 4
+  pitch: 0.80        # Y 방향 간격 — 로봇 폭(0.55)보다 커야 통과 가능
+  web_height: 0.35   # 수직 웨브 높이
+  web_thickness: 0.012
+  flange_width: 0.10
+  flange_thickness: 0.015
+
+transverse:          # 횡방향 웨브 프레임 (맨홀 통과)
+  enabled: true
+  count: 2
+  height: 0.6
+  thickness: 0.015
+  manhole_width: 0.7    # 로봇 폭보다 커야 함
+  manhole_height: 0.5
+
+side_wall:           # 측면 외판
+  enabled: true
+  height: 1.2
+  thickness: 0.02
+
+robot_spawn:         # 로봇 초기 위치 (론지 사이 통로 중앙)
+  x: -3.0
+  y: 0.0
+  yaw: 0.0

@@ -1,0 +1,50 @@
+# ── ROS2 / colcon ──
+build/
+install/
+log/
+.colcon*
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ── 시크릿 ──
+.env
+.env.*
+*.key
+*.pem
+
+# ── 대용량 산출물 (rosbag·영상은 리포 밖에서 관리) ──
+*.bag
+*.db3
+*.mcap
+*.mp4
+*.webm
+*.zip
+*.7z
+
+# ── STEP 도면에서 생성한 메시 ──
+# 원본 STEP 은 git 밖에서 관리한다.
+# 메시는 step_to_gazebo.py 로 언제든 다시 뽑을 수 있으므로 저장소에 넣지 않는다
+# (수십 MB 짜리 STL 이 히스토리에 쌓이면 clone 이 무거워진다).
+# model.sdf / model.config 는 작으므로 커밋한다.
+src/sp_gazebo/models/*/meshes/
+
+# ── 실험 결과 (필요한 것만 골라 커밋) ──
+# 'results/' 로 쓰면 디렉터리 자체가 제외돼 아래 negation 이 먹지 않는다.
+results/*
+!results/.gitkeep
+
+# ── OS / 편집기 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+*.user
+.vscode/
+
+# 로봇 STEP 파싱이 13분 걸려서 형상을 캐시한다 (step_to_robot.py)
+.step_cache/
+# 로봇 도면에서 뽑은 링크별 메시 (step_to_robot.py 로 재생성)
+src/sp_description/meshes/*.stl

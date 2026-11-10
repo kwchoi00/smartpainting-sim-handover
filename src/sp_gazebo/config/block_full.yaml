@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════════
+#  선박 블록 내부 — 실제 스케일
+#
+#  ⚠ 전부 가정치. 실제 대상 블록 도면 치수로 교체할 것.
+#     드리프트 실험의 주행거리 스케일이 여기서 결정된다.
+#  단위: m
+# ═══════════════════════════════════════════════════════════════
+
+world_name: ship_block_full
+
+plate:
+  length: 24.0
+  width:  12.0
+  thickness: 0.02
+  raised: false      # 실블록은 바닥 자체이므로 추락 시나리오 비활성
+  height: 0.0
+
+longi:
+  enabled: true
+  type: T
+  count: 12
+  pitch: 0.85
+  web_height: 0.40
+  web_thickness: 0.012
+  flange_width: 0.15
+  flange_thickness: 0.018
+
+transverse:
+  enabled: true
+  count: 6
+  height: 2.0
+  thickness: 0.015
+  manhole_width: 0.8
+  manhole_height: 0.7
+
+side_wall:
+  enabled: true
+  height: 2.5
+  thickness: 0.02
+
+robot_spawn:
+  x: -10.0
+  y: 0.0
+  yaw: 0.0

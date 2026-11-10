@@ -1,0 +1,119 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+      Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Name: Views
+
+Visualization Manager:
+  Global Options:
+    Background Color: 38; 40; 45
+    Fixed Frame: odom
+    Frame Rate: 30
+
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 40
+      Color: 80; 80; 90
+      Line Style:
+        Value: Lines
+
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 1
+
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Marker Scale: 0.4
+
+    # 휠 오도메트리 (추정) — 주황
+    - Class: rviz_default_plugins/Odometry
+      Name: Wheel Odometry
+      Enabled: true
+      Topic:
+        Value: /odom
+        Depth: 10
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Keep: 300
+      Position Tolerance: 0.05
+      Angle Tolerance: 0.05
+      Shape:
+        Value: Arrow
+        Color: 230; 120; 25
+        Alpha: 1
+        Shaft Length: 0.2
+        Shaft Radius: 0.02
+        Head Length: 0.08
+        Head Radius: 0.05
+      Covariance:
+        Value: false
+
+    # 참값 — 초록. 두 궤적의 벌어짐이 곧 드리프트다.
+    - Class: rviz_default_plugins/Odometry
+      Name: Ground Truth
+      Enabled: true
+      Topic:
+        Value: /ground_truth
+        Depth: 10
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Keep: 300
+      Position Tolerance: 0.05
+      Angle Tolerance: 0.05
+      Shape:
+        Value: Arrow
+        Color: 40; 200; 90
+        Alpha: 1
+        Shaft Length: 0.2
+        Shaft Radius: 0.02
+        Head Length: 0.08
+        Head Radius: 0.05
+      Covariance:
+        Value: false
+
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 12
+      Pitch: 0.85
+      Yaw: 2.4
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Target Frame: base_footprint
+    Saved: ~
+
+Window Geometry:
+  Height: 900
+  Width: 1500
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false

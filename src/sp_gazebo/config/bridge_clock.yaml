@@ -1,0 +1,11 @@
+# 월드 토픽 브리지 — 로봇 유무와 무관하게 항상 뜬다.
+#
+# /clock 은 gz 의 시뮬레이션 시각이다. use_sim_time:=true 인 노드는 전부
+# 이걸 보고 돈다. 로봇 브리지(bridge.yaml)에 같이 두면 robot:=false 일 때
+# 시각이 안 나와서 월드만 띄운 상태의 rviz·기록 도구가 멈춘다.
+
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS

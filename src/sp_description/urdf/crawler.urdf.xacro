@@ -1,0 +1,681 @@
+<?xml version="1.0"?>
+<!--
+  스마트페인팅 모바일 로봇 (Gazebo Harmonic / ROS2 Jazzy)
+
+  도면 `모바일 로봇 ASSY.stp` (6안) 를 옮긴 모델.
+  외형은 `step_to_robot.py` 가 STEP 에서 뽑은 링크별 STL,
+  물리(충돌·관성)는 박스·실린더로 단순화한다 — 4만 면짜리 메시를 충돌체로 쓰면
+  물리 계산이 멈춘다.
+
+  링크 구성
+
+      base_footprint                    론지 플랜지 상면 = 바퀴부 접지면 (평가 기준)
+       └ base_link                      **바퀴부** — 인접 두 론지 위를 X 로만 주행
+          ├ l0..l12 / r0..r12           구동륜 26개. 여기서만 론지에 접지, DiffDrive
+          └ body_turn_link              **회전부** 턴테이블 (revolute Z, /body_turn)
+              ├ body_sc_*               **몸체부 시저** X자 (종동, 2단, 앞뒤 1.55 m)
+              └ body_link               **몸체부 상하** (prismatic Z, /body_lift)
+                  ├ carriage_link       리니어축 (prismatic X, /rail_cmd)
+                  │   └ arm_base_link .. arm_tool_link
+                  │                     CRX-20iA/L 6축 (/arm_j1 .. /arm_j6)
+                  ├ front_upper_link   **전단부 윗부분** 회전 (revolute Z, /front_turn)
+                  │   ├ front_sc_*      **전단부 시저** X자 링키지 (종동, 2단, 앞뒤 1 m)
+                  │   └ front_lower_link **전단부 아랫부분** 상하 (prismatic Z, /front_lift)
+                  │       └ *_roller_link 접지 롤러 4개 — 바닥에 닿는다
+                  └ rear_upper_link / rear_lower_link    후단부 (동일)
+
+  ⚠ **전/후단부는 바퀴부가 아니라 몸체부 양 끝에 매달린다.** 그래서 몸체부가 돌면
+    전/후단부도 같이 끌려 돈다 — 아래 회전 메커니즘이 성립하는 이유다.
+
+  ⚠ **전/후단부도 한 덩어리가 아니다.** 윗부분(회전부)은 몸체부에 붙어 **회전만** 하고,
+    아랫부분(궤도)만 시저로 바닥까지 내려간다. 그래서 축 순서가 **회전 → 승강**이다.
+
+  ⚠ **바퀴부↔몸체부도 회전부 + 시저다.** 회전부(턴테이블)가 바퀴부에 얹히고
+    그 위 시저가 덱을 들어올린다 — 전후단부와 같은 회전 → 승강 순서다.
+
+  ⚠ **상하축 두 곳은 X자 시저(팬터그래프)로 오르내린다.** 다만 시저는 닫힌 루프라
+    URDF 로 직접 못 쓴다. 그래서 **하중·행정은 prismatic 관절이 그대로 담당**하고,
+    X자 바는 그 행정을 따라가는 **종동 링키지**로 붙였다 (충돌체 없음).
+    각도는 scissor_driver 노드가 θ = asin(ext/(N·L)) 로 풀어 넣는다.
+    자세한 기하는 아래 '시저 리프트' 절 참조.
+
+  회전 메커니즘 (몸체부를 론지와 수직으로 돌릴 때):
+      1) /front_lift /rear_lift → 0.64   전후단부를 들어 **론지와 거더**를 넘긴다
+                                         (0.50 이면 거더 보강대(0.590/0.660)에 걸린다)
+      2) /body_turn → 1.5708             몸체부 90°. **전후단부는 지령 없이 같이 돈다**
+                                         (몸체부의 자식이라 구조적으로 따라간다)
+      3) /front_lift /rear_lift → 0.450  론지 상면 높이로 내린다
+
+  ⚠ 수직 자세에서 전후단부 **아랫부분**의 접지면은 **통로 바닥이 아니라 론지 상면**이다.
+    길이 1.05 m 짜리 전후단부가 pitch 0.845 를 가로지르면 반드시 론지를 깔고
+    앉기 때문. 0 (바닥)까지 내리라고 하면 로봇이 370 mm 들린다 (실측).
+
+  ⚠ **q=0 이 '론지 주행 자세'** 다. 모델은 관절값 0 으로 스폰되므로 이렇게 잡아야
+    스폰 순간 끝단부가 바닥에 닿는다. 도면의 '전부 한 평면' 자세는 끝단 상하축을
+    +end_drop(0.450) 으로 올린 상태다.
+
+  ⚠ 메시는 전부 **도면 좌표(z=0 = 도면 공통 접지면)** 로 뽑혀 있고, 각 링크 원점이
+    그 좌표계의 특정 점(바퀴부=원점, 끝단부=회전축, 캐리지=슬라이더 중심)에 맞춰져
+    있다. 그래서 <visual> 의 origin 은 전부 0 이다 — 여기서 오프셋을 주면 안 된다.
+
+  ⚠ 무한궤도를 가상 바퀴로 근사한다. 물리 엔진에 궤도 모델이 없다.
+    체인 링크 1,470개를 실제로 시뮬레이션하는 것은 불가능하고 필요하지도 않다.
+    대신 **slip 이 모델링되지 않는다** — 오도메트리가 낙관적이다.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="crawler">
+
+  <xacro:include filename="$(find sp_description)/urdf/params.xacro"/>
+  <xacro:include filename="$(find sp_description)/urdf/crawler.gazebo.xacro"/>
+
+  <!-- ═══ 런치에서 바꿀 수 있는 인자 ═══
+       arm_fixed=true  : 팔 6축을 **접은 자세로 굳힌다**. 관절·제어기가 사라진다.
+                         주행 드리프트 실험에는 팔이 캐리지 위 질량으로만 관여하므로
+                         이쪽이 기본이다 — 가볍고, 과도상태가 없다.
+       arm_fixed=false : 6축을 살린다 (/arm_j1 .. /arm_j6 로 자세를 준다).
+
+           ros2 launch sp_gazebo sim.launch.py arm_fixed:=false -->
+  <xacro:arg name="arm_fixed" default="true"/>
+  <xacro:property name="arm_fixed" value="$(arg arm_fixed)"/>
+
+  <xacro:property name="mesh_dir" value="package://sp_description/meshes"/>
+
+  <!-- ═══════════ 관성 매크로 ═══════════ -->
+  <xacro:macro name="box_inertia" params="m x y z ox:=0 oy:=0 oz:=0">
+    <inertial>
+      <origin xyz="${ox} ${oy} ${oz}"/>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(y*y+z*z)/12.0}" ixy="0" ixz="0"
+               iyy="${m*(x*x+z*z)/12.0}" iyz="0"
+               izz="${m*(x*x+y*y)/12.0}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- oz: 링크 원점에서 원통 **중심**까지의 거리. 팔 링크처럼 원점이 관절(끝)에
+       있는 경우 반드시 줘야 무게중심이 맞는다. 바퀴·롤러는 원점이 이미 중심이라 0. -->
+  <xacro:macro name="cylinder_inertia" params="m r h oz:=0">
+    <inertial>
+      <origin xyz="0 0 ${oz}"/>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(3*r*r+h*h)/12.0}" ixy="0" ixz="0"
+               iyy="${m*(3*r*r+h*h)/12.0}" iyz="0"
+               izz="${m*r*r/2.0}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- 로봇 전체를 **밝은 회색 하나**로 통일한다.
+       예전에는 부위별로 색을 나눴는데(강재/고무/FANUC 파랑), 형상 확인에는
+       한 색이 오히려 낫다 — 색 경계가 아니라 실제 형상 경계가 보인다. -->
+  <material name="light"><color rgba="0.82 0.83 0.84 1"/></material>
+
+  <!-- ═══════════ base = 바퀴부 ═══════════
+       base_footprint : 바퀴부 접지면(론지 플랜지 상면). 평가 기준 프레임.
+       base_link      : 메시 좌표계 원점 그대로. 접지면보다 wheel_unit_z0 아래.
+       메시 z=0 이 '도면 공통 접지면'이고 바퀴부 체인 하단이 z=0.008 이므로,
+       base_footprint 를 그 8 mm 위에 둔다. -->
+  <link name="base_footprint"/>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child  link="base_link"/>
+    <origin xyz="0 0 ${-wheel_unit_z0}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <visual>
+      <geometry><mesh filename="${mesh_dir}/wheel_unit.stl"/></geometry>
+      <material name="light"/>
+    </visual>
+    <!-- 충돌은 바퀴부 몸통 박스 하나. 접지는 구동륜이 맡는다.
+         몸통은 통로(695) 안에 들어가고 론지 플랜지 위로 21 mm 떠 있다. -->
+    <collision>
+      <origin xyz="0 0 ${(wheel_unit_body_z0 + wheel_unit_z1)/2.0}"/>
+      <geometry>
+        <box size="${2*wheel_unit_x} ${2*wheel_unit_y}
+                   ${wheel_unit_z1 - wheel_unit_body_z0}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertia m="${wheel_unit_mass}" x="${2*wheel_unit_x}"
+                       y="${2*wheel_unit_y}" z="${wheel_unit_z1 - wheel_unit_z0}"
+                       oz="${(wheel_unit_z0 + wheel_unit_z1)/2.0}"/>
+  </link>
+
+  <!-- ═══════════ 구동륜 — 인접한 두 론지 위 ═══════════
+       **궤간 = 론지 pitch(0.845)** 로 고정. 좌측 바퀴 열이 한 론지, 우측 열이
+       옆 론지 플랜지 위를 구른다. 측당 13개를 촘촘히(간극 8.2 mm) 깔아
+       바퀴부 길이(±0.826)를 ±0.780 까지 메우고 접지를 분산한다.
+       도면의 체인(궤간 421.5)은 플랜지에 얹히지 않아 메시에서 뺐다 —
+       step_to_robot.py 의 wheel_chain 그룹 참조. -->
+  <xacro:macro name="drive_wheel" params="prefix ysign xoff">
+    <link name="${prefix}_wheel_link">
+      <visual>
+        <origin rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${drive_width}"/></geometry>
+        <material name="light"/>
+      </visual>
+      <collision>
+        <origin rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${drive_width}"/></geometry>
+      </collision>
+      <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${drive_width}"/>
+    </link>
+
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child  link="${prefix}_wheel_link"/>
+      <origin xyz="${xoff} ${ysign * drive_gauge / 2.0} ${axle_z}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="drive_wheels" params="side ysign i">
+    <xacro:if value="${i &lt; drive_wheel_n}">
+      <xacro:drive_wheel prefix="${side}${i}" ysign="${ysign}"
+                         xoff="${drive_wheel_x0 - i*drive_wheel_dx}"/>
+      <xacro:drive_wheels side="${side}" ysign="${ysign}" i="${i+1}"/>
+    </xacro:if>
+  </xacro:macro>
+
+  <xacro:drive_wheels side="l" ysign="1"  i="0"/>
+  <xacro:drive_wheels side="r" ysign="-1" i="0"/>
+
+  <!-- ═══════════ 시저 리프트 (X자 팬터그래프) ═══════════
+       상하축의 실제 승강 기구. **하중은 지금까지대로 prismatic 관절이 받고**,
+       여기 바들은 그 행정을 따라가는 종동 링키지다 (충돌체 없음).
+       왜 이렇게 나눴는지는 params.xacro 의 시저 절 참조.
+
+  ━━ X자 격자를 트리로 어떻게 펴는가 ━━
+
+  바 길이 L, 각도 θ, w = L·cosθ, h = L·sinθ 일 때 3단 시저의 핀 좌표는
+
+        (0,3h) ●───────────● (w,3h)      ← 스택 상단 (플랫폼)
+                ＼   A2   ／
+                  ＼   ／  ← B2 는 A2 의 **중간핀**에 걸린다
+                  ／   ＼
+        (0,2h) ●───────────● (w,2h)
+                ＼   B1   ／
+                  ＼   ／
+                  ／   ＼
+        (0, h) ●───────────● (w, h)
+                ＼   A0   ／
+                  ＼   ／
+                  ／   ＼
+        (0, 0) ●───────────● (w, 0)
+        고정핀              미끄럼단 (θ 에 따라 x 가 변한다)
+
+  A 바는 좌하→우상(절대각 +θ), B 바는 우하→좌상(절대각 −θ)이다. 그러면
+
+    · **주 체인** A0 →(A0 우끝)→ B1 →(B1 좌끝)→ A2 →(A2 우끝)→ B3 …
+      끝핀끼리 이어지므로 부모의 **고정 국소좌표**(±L, 0, 0)에 자식이 붙는다.
+    · **짝 바** B0 은 A0 의 중간핀(+L/2), A1 은 B1 의 중간핀(−L/2) …
+      역시 부모의 고정 국소좌표다.
+
+  즉 **θ 에 의존하는 부착점이 하나도 없어서 prismatic 보조축 없이 트리로 닫힌다.**
+  스택 전체가 고정핀 하나(x=0 열)에만 매달리고, 미끄럼단은 자유단이라
+  실제 시저의 "한쪽 핀 + 한쪽 롤러"가 그대로 재현된다.
+
+  관절값은 두 가지뿐이다:
+      A0 (뿌리)          = +θ
+      그 외 모든 바      = ∓2θ   (A↔B 절대각 차가 항상 2θ)
+  부호는 <axis> 를 뒤집어 흡수하므로 **지령 토픽은 조립체당 2개**면 된다.
+
+  ⚠ 스택 상단은 플랫폼에 **붙어 있지 않다** (닫힌 루프라 URDF 로 못 붙인다).
+    대신 scissor_driver 가 θ = asin(ext / (N·L)) 를 정확히 풀어 넣으므로
+    상단이 전 행정에서 플랫폼 하면과 일치한다. 검산은 docs/robot.md 참조. -->
+
+  <!-- 바 하나 = 좌우 두 장 + 크로스튜브를 묶은 강체 하나.
+       `off` 는 링크 원점에서 박스 중심까지의 거리 —
+       원점이 좌끝이면 +L/2, 우끝이면 −L/2, 중간핀이면 0. -->
+  <xacro:macro name="scissor_bar" params="name blen dy off ty tz">
+    <link name="${name}">
+      <visual>
+        <origin xyz="${off} ${dy} 0"/>
+        <geometry><box size="${blen} ${ty} ${tz}"/></geometry>
+        <material name="light"/>
+      </visual>
+      <visual>
+        <origin xyz="${off} ${-dy} 0"/>
+        <geometry><box size="${blen} ${ty} ${tz}"/></geometry>
+        <material name="light"/>
+      </visual>
+      <!-- 충돌체 없음: 하중을 받지 않는 종동체다. -->
+      <xacro:box_inertia m="${scissor_bar_mass}" x="${blen}" y="${2*dy}"
+                         z="${tz}" ox="${off}"/>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="scissor_stage" params="ns blen dy dy2 n i ty tz">
+    <xacro:if value="${i &lt; n}">
+      <!-- 주 체인 바: 짝수단 = A(좌끝 원점), 홀수단 = B(우끝 원점) -->
+      <xacro:scissor_bar name="${ns}_m${i}" blen="${blen}" dy="${dy}" ty="${ty}" tz="${tz}"
+                         off="${blen/2.0 if i%2==0 else -blen/2.0}"/>
+      <joint name="${ns}_m${i}_scissor_joint" type="revolute">
+        <parent link="${ns + '_root' if i == 0 else ns + '_m' + str(i-1)}"/>
+        <child  link="${ns}_m${i}"/>
+        <!-- 부모의 반대쪽 끝핀에 붙는다 (i=0 은 고정핀 그 자리) -->
+        <origin xyz="${0 if i == 0 else (blen if i%2==1 else -blen)} 0 0"/>
+        <axis xyz="0 ${-1 if i%2==0 else 1} 0"/>
+        <limit lower="-0.05" upper="2.7" effort="500" velocity="3.0"/>
+        <dynamics damping="0.2" friction="0.0"/>
+      </joint>
+
+      <!-- 짝 바: 주 체인 바의 중간핀에서 반대 방향으로 벌어진다.
+           ⚠ y 열을 **안쪽(dy2)** 으로 뺀다. 같은 열에 두면 각도가 얕을 때
+             교차점에서 두 바가 서로 파고들어 덩어리처럼 보인다. 실제 시저도
+             안팎 두 열로 엇갈려 물린다. -->
+      <xacro:scissor_bar name="${ns}_p${i}" blen="${blen}" dy="${dy2}" ty="${ty}" tz="${tz}" off="0"/>
+      <joint name="${ns}_p${i}_scissor_joint" type="revolute">
+        <parent link="${ns}_m${i}"/>
+        <child  link="${ns}_p${i}"/>
+        <origin xyz="${blen/2.0 if i%2==0 else -blen/2.0} 0 0"/>
+        <axis xyz="0 ${1 if i%2==0 else -1} 0"/>
+        <limit lower="-0.05" upper="2.7" effort="500" velocity="3.0"/>
+        <dynamics damping="0.2" friction="0.0"/>
+      </joint>
+
+      <xacro:scissor_stage ns="${ns}" blen="${blen}" dy="${dy}" dy2="${dy2}" n="${n}" i="${i+1}" ty="${ty}" tz="${tz}"/>
+    </xacro:if>
+  </xacro:macro>
+
+  <!-- 조립체 하나. xyz 는 **고정핀** 위치다 (스택은 여기서 위로 자란다). -->
+  <!-- rpy 로 스택을 뒤집을 수 있다. "${pi} 0 0" 이면 아래로 자란다 —
+       전후단부처럼 **고정된 윗부분에 매달려 아랫부분을 내리는** 배치에 쓴다. -->
+  <xacro:macro name="scissor_stack" params="ns parent xyz blen dy dy2 n ty tz rpy:='0 0 0'">
+    <link name="${ns}_root">
+      <xacro:box_inertia m="0.05" x="0.03" y="0.03" z="0.03"/>
+    </link>
+    <joint name="${ns}_root_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child  link="${ns}_root"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+    <xacro:scissor_stage ns="${ns}" blen="${blen}" dy="${dy}" dy2="${dy2}" n="${n}" i="0" ty="${ty}" tz="${tz}"/>
+  </xacro:macro>
+
+  <!-- ═══════════ 바퀴부 → 회전부 → 시저 → 몸체부 ═══════════
+
+       전후단부와 같은 구성이다. **회전부가 바퀴부에 얹히고, 그 위 시저가
+       몸체부를 들어올린다.** 축 순서도 같다 — 회전 → 승강.
+
+           ┌── 덱 (몸체부) ─────────────────────┐  0.454~0.486
+           │      ↕ 시저 2단 2조  /body_lift     │  접힘 60, 최대 210
+           ├── 회전부 (턴테이블 Ø480) ───────────┤  0.334~0.394
+           │      ↻ /body_turn                   │
+           ├── 바퀴부 (base_link) ───────────────┤  0.029~0.454
+           └── 구동륜 26개 ─────────────────────┘
+
+       ⚠ 예전에는 승강 → 회전이었다. 그러면 회전부가 시저 위에 얹혀 같이 오르내리는데,
+         실제로는 회전부가 바퀴부에 붙어 있다.
+       ⚠ 회전부(60)와 접힌 시저(60)는 바퀴부 상면(0.454) 아래로 **매립**된다.
+         도면상 바퀴부 상면과 덱 하면이 딱 붙어 있어 사이 공간이 0 이기 때문이다.
+       ⚠ 이 두 기구는 도면(6안)에 없다 — params.xacro 의 해당 절 참조. -->
+  <link name="body_turn_link">
+    <!-- 턴테이블 디스크 -->
+    <visual>
+      <origin xyz="0 0 ${(body_turn_z0 + body_turn_z1)/2.0}"/>
+      <geometry>
+        <cylinder radius="${body_turn_r}" length="${body_turn_z1 - body_turn_z0}"/>
+      </geometry>
+      <material name="light"/>
+    </visual>
+    <!-- 회전 프레임 — 시저 하단 핀(x ±0.775)을 받는 빔.
+         턴테이블 반경 0.24 로는 그 핀들을 받을 수 없어서 필요하다. -->
+    <visual>
+      <origin xyz="0 0 ${(body_turn_z1 + body_frame_z1)/2.0}"/>
+      <geometry>
+        <box size="${2*body_frame_x} ${2*body_frame_y} ${body_frame_z1 - body_turn_z1}"/>
+      </geometry>
+      <material name="light"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${(body_turn_z0 + body_turn_z1)/2.0}"/>
+      <geometry>
+        <cylinder radius="${body_turn_r}" length="${body_turn_z1 - body_turn_z0}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertia m="${body_turn_mass + body_frame_mass}"
+                       x="${2*body_frame_x}" y="${2*body_frame_y}"
+                       z="${body_frame_z1 - body_turn_z0}"
+                       oz="${(body_turn_z0 + body_frame_z1)/2.0}"/>
+  </link>
+
+  <joint name="body_turn_joint" type="revolute">
+    <parent link="base_link"/>
+    <child  link="body_turn_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${-pi}" upper="${pi}" effort="8000" velocity="${turn_vel}"/>
+    <dynamics damping="${turn_damping}" friction="${turn_friction}"/>
+  </joint>
+
+  <!-- 몸체부(덱) — 메시는 상판 + 리니어 레일이다.
+       리니어축·팔·전후단부가 전부 여기에 매달린다. -->
+  <link name="body_link">
+    <visual>
+      <geometry><mesh filename="${mesh_dir}/deck.stl"/></geometry>
+      <material name="light"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${(deck_z0 + deck_z1)/2.0}"/>
+      <geometry><box size="${2*deck_x} ${2*deck_y} ${deck_z1 - deck_z0}"/></geometry>
+    </collision>
+    <xacro:box_inertia m="${deck_mass}" x="${2*deck_x}" y="${2*deck_y}"
+                       z="${deck_z1 - deck_z0}" oz="${(deck_z0 + deck_z1)/2.0}"/>
+  </link>
+
+  <joint name="body_lift_joint" type="prismatic">
+    <parent link="body_turn_link"/>
+    <child  link="body_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="${body_lift_range}" effort="20000" velocity="0.2"/>
+    <dynamics damping="2000.0" friction="200.0"/>
+  </joint>
+
+  <!-- 몸체부 시저 — **회전 프레임 상면에 고정핀을 박고** 덱 하면까지 자란다.
+       회전부의 자식이므로 /body_turn 을 돌리면 시저도 같이 돈다 (덱과 함께).
+       바가 1.55 m 라 폭이 전 행정 1.545~1.549 m — 바퀴부(1.652 m)를 꽉 채운다.
+       q=0 에서 접힌 110 mm 는 회전부와 함께 바퀴부 상면 아래로 매립된다. -->
+  <xacro:scissor_stack ns="body_sc" parent="body_turn_link"
+                       xyz="${body_sc_x} 0 ${body_frame_z1}"
+                       blen="${body_sc_len}" dy="${body_sc_dy}" dy2="${body_sc_dy2}"
+                       n="${body_sc_n}" ty="${body_sc_ty}" tz="${body_sc_tz}"/>
+
+  <!-- ═══════════ 리니어축 캐리지 ═══════════
+       링크 원점 = 도면 자세에서의 슬라이더 4개 중심. q=0 이 **행정 중심**이다. -->
+  <link name="carriage_link">
+    <visual>
+      <geometry><mesh filename="${mesh_dir}/carriage.stl"/></geometry>
+      <material name="light"/>
+    </visual>
+    <collision>
+      <origin xyz="${carriage_ctr_x - carriage_ref_x} 0
+                   ${(carriage_z0 + carriage_z1)/2.0}"/>
+      <geometry>
+        <box size="${carriage_box_x} ${carriage_box_y} ${carriage_z1 - carriage_z0}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertia m="${carriage_mass}" x="${carriage_box_x}" y="${carriage_box_y}"
+                       z="${carriage_z1 - carriage_z0}"
+                       ox="${carriage_ctr_x - carriage_ref_x}"
+                       oz="${(carriage_z0 + carriage_z1)/2.0}"/>
+  </link>
+
+  <joint name="carriage_joint" type="prismatic">
+    <parent link="body_link"/>
+    <child  link="carriage_link"/>
+    <origin xyz="${rail_center_x} 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="${-rail_travel}" upper="${rail_travel}" effort="4000" velocity="0.5"/>
+    <dynamics damping="200.0" friction="20.0"/>
+  </joint>
+
+  <!-- ═══════════ 매니퓰레이터 — FANUC CRX-20iA/L (6축) ═══════════
+       캐리지 위에 서서 레일을 따라 덱을 왕복한다.
+
+       도면의 팔 덩어리는 **쓰지 않는다.** 접힌 자세로 굳어 있어 관절이 없고,
+       `J2ARM_UNIT_LONG` 등은 링크가 아니라 작동영역이라 변환기가 버린다.
+       대신 공개 제원(도달 1418 mm)으로 6축을 세운다 — params.xacro 참조.
+
+       구성 (관절값 0 = 곧게 선 자세):
+           베이스 원통 → J1(요) → 숄더 → J2(피치) → 상완 0.710
+                       → J3(피치) → 전완 0.540 → J4(롤)
+                       → J5(피치) → 손목 0.168 → J6(롤) → 플랜지
+
+       ⚠ 관절값 0 은 도달 2.3 m 로 서 있는 자세라 주행에 쓸 수 없다.
+         제어기 initial_position 으로 **접은 자세**에서 시작한다. -->
+  <xacro:macro name="arm_seg" params="name slen r m rpy:='0 0 0'">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 ${slen/2.0}" rpy="${rpy}"/>
+        <geometry><cylinder radius="${r}" length="${slen}"/></geometry>
+        <material name="light"/>
+      </visual>
+      <xacro:if value="${arm_collision}">
+        <collision>
+          <origin xyz="0 0 ${slen/2.0}" rpy="${rpy}"/>
+          <geometry><cylinder radius="${r}" length="${slen}"/></geometry>
+        </collision>
+      </xacro:if>
+      <xacro:cylinder_inertia m="${m}" r="${r}" h="${slen}" oz="${slen/2.0}"/>
+    </link>
+  </xacro:macro>
+
+  <!-- 팔 관절 하나. arm_fixed 면 **home 각도를 origin 에 구워 넣은 fixed** 로 낸다.
+       ⚠ fixed 로 굳히면 /arm_jN 토픽이 사라진다. 자세를 바꾸려면 arm_fixed:=false. -->
+  <xacro:macro name="arm_joint" params="name parent child xyz ax home lim eff vel damp fric">
+    <xacro:if value="${arm_fixed}">
+      <joint name="${name}" type="fixed">
+        <parent link="${parent}"/>
+        <child  link="${child}"/>
+        <origin xyz="${xyz}"
+                rpy="${'0 0 ' + str(home) if ax == 'z' else '0 ' + str(home) + ' 0'}"/>
+      </joint>
+    </xacro:if>
+    <xacro:unless value="${arm_fixed}">
+      <joint name="${name}" type="revolute">
+        <parent link="${parent}"/>
+        <child  link="${child}"/>
+        <origin xyz="${xyz}"/>
+        <axis xyz="${'0 0 1' if ax == 'z' else '0 1 0'}"/>
+        <limit lower="${-lim}" upper="${lim}" effort="${eff}" velocity="${vel}"/>
+        <dynamics damping="${damp}" friction="${fric}"/>
+      </joint>
+    </xacro:unless>
+  </xacro:macro>
+
+  <!-- 베이스: 캐리지 상면에 고정 -->
+  <xacro:arm_seg name="arm_base_link" slen="${arm_base_h}" r="${arm_base_r}"
+                 m="${arm_base_mass}"/>
+  <joint name="arm_base_joint" type="fixed">
+    <parent link="carriage_link"/>
+    <child  link="arm_base_link"/>
+    <!-- 캐리지 링크 원점은 도면 슬라이더 중심이므로 x 는 0, z 만 올린다 -->
+    <origin xyz="0 0 ${arm_mount_z}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- J1 요 -->
+  <xacro:arm_seg name="arm_j1_link" slen="${arm_sh_h}" r="${arm_sh_r}" m="${arm_sh_mass}"/>
+  <xacro:arm_joint name="arm_j1_joint" parent="arm_base_link" child="arm_j1_link"
+                   xyz="0 0 ${arm_base_h}" ax="z" home="0"
+                   lim="${arm_lim_j1}" eff="1500" vel="2.0" damp="20.0" fric="2.0"/>
+
+  <!-- J2 어깨 피치 — 상완 -->
+  <xacro:arm_seg name="arm_j2_link" slen="${arm_upper}" r="${arm_link_r}"
+                 m="${arm_upper_mass}"/>
+  <xacro:arm_joint name="arm_j2_joint" parent="arm_j1_link" child="arm_j2_link"
+                   xyz="0 ${arm_sh_y} ${arm_sh_h}" ax="y" home="${arm_home_j2}"
+                   lim="${arm_lim_j2}" eff="1500" vel="2.0" damp="20.0" fric="2.0"/>
+
+  <!-- J3 팔꿈치 피치 — 전완 -->
+  <xacro:arm_seg name="arm_j3_link" slen="${arm_fore}" r="${arm_link_r}"
+                 m="${arm_fore_mass}"/>
+  <xacro:arm_joint name="arm_j3_joint" parent="arm_j2_link" child="arm_j3_link"
+                   xyz="0 0 ${arm_upper}" ax="y" home="${arm_home_j3}"
+                   lim="${arm_lim_j3}" eff="1200" vel="2.0" damp="15.0" fric="1.5"/>
+
+  <!-- J4 전완 롤 -->
+  <xacro:arm_seg name="arm_j4_link" slen="${arm_wrist*0.35}" r="${arm_link_r*0.9}"
+                 m="${arm_wrist_mass*0.4}"/>
+  <xacro:arm_joint name="arm_j4_joint" parent="arm_j3_link" child="arm_j4_link"
+                   xyz="0 0 ${arm_fore}" ax="z" home="0"
+                   lim="${arm_lim_j4}" eff="600" vel="2.5" damp="8.0" fric="0.8"/>
+
+  <!-- J5 손목 피치 -->
+  <xacro:arm_seg name="arm_j5_link" slen="${arm_wrist*0.65}" r="${arm_link_r*0.8}"
+                 m="${arm_wrist_mass*0.6}"/>
+  <xacro:arm_joint name="arm_j5_joint" parent="arm_j4_link" child="arm_j5_link"
+                   xyz="0 0 ${arm_wrist*0.35}" ax="y" home="${arm_home_j5}"
+                   lim="${arm_lim_j5}" eff="600" vel="2.5" damp="8.0" fric="0.8"/>
+
+  <!-- J6 플랜지 롤 + 툴 -->
+  <link name="arm_tool_link">
+    <visual>
+      <origin xyz="0 0 0.030"/>
+      <geometry><cylinder radius="0.048" length="0.060"/></geometry>
+      <material name="light"/>
+    </visual>
+    <xacro:if value="${arm_collision}">
+      <collision>
+        <origin xyz="0 0 0.030"/>
+        <geometry><cylinder radius="0.048" length="0.060"/></geometry>
+      </collision>
+    </xacro:if>
+    <xacro:cylinder_inertia m="${arm_tool_mass}" r="0.048" h="0.060" oz="0.030"/>
+  </link>
+  <xacro:arm_joint name="arm_j6_joint" parent="arm_j5_link" child="arm_tool_link"
+                   xyz="0 0 ${arm_wrist*0.65}" ax="z" home="0"
+                   lim="${arm_lim_j6}" eff="400" vel="3.0" damp="5.0" fric="0.5"/>
+
+  <!-- ═══════════ 전/후단부 — 윗부분(회전) + 시저 + 아랫부분(바닥 접지) ═══════════
+
+       **한 덩어리가 아니다.** 도면 서브어셈블리가 셋으로 갈라진다 (params.xacro 참조):
+
+           ┌── 덱 하면 0.454 ────────────────────────────┐
+           │  윗부분 (회전부 Ø400 + 상부 프레임)          │  0.384~0.454
+           │    ↑ 몸체부에 붙어 **회전만** 한다            │  /front_turn
+           ├──────────────────────────────────────────────┤
+           │  시저 (X자, 앞뒤 1.0 m 로 꽉 참)             │  접힘 0.254
+           │    ↕ 아랫부분을 바닥까지 내린다               │  /front_lift
+           ├──────────────────────────────────────────────┤
+           │  아랫부분 (궤도) — 바닥에 닿는다              │  0.000~0.130
+           └──────────────────────────────────────────────┘
+
+       ⚠ **축 순서가 회전 → 승강이다.** 예전에는 승강 → 회전이었는데, 그러면
+         윗부분까지 통째로 내려가서 실제 기구와 다르다. 회전축이 위에 있으므로
+         /front_turn 을 돌리면 시저와 아랫부분이 **같이** 돈다 — 이것이 맞다.
+
+       ⚠ 링크 원점은 셋 다 **회전축 x, 도면 z=0**(도면 공통 접지면)이다.
+         메시도 그 기준으로 뽑혀 있어서 <visual> 의 origin 은 전부 0 이다.
+
+       ⚠ 지령 인터페이스는 그대로다 — /front_lift 는 여전히 미터, 0 이 바닥이다. -->
+  <xacro:macro name="end_unit" params="prefix xsign">
+
+    <!-- ── 윗부분: 몸체부에 매달려 회전만 한다 ── -->
+    <link name="${prefix}_upper_link">
+      <visual>
+        <geometry><mesh filename="${mesh_dir}/${prefix}_upper.stl"/></geometry>
+        <material name="light"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${(end_upper_z0 + end_upper_z1)/2.0}"/>
+        <geometry>
+          <box size="${2*end_upper_x} ${2*end_upper_y} ${end_upper_z1 - end_upper_z0}"/>
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="${end_upper_mass}" x="${2*end_upper_x}" y="${2*end_upper_y}"
+                         z="${end_upper_z1 - end_upper_z0}"
+                         oz="${(end_upper_z0 + end_upper_z1)/2.0}"/>
+    </link>
+
+    <joint name="${prefix}_turn_joint" type="revolute">
+      <!-- ⚠ 부모가 **몸체부**다. 몸체부가 돌면 끝단부도 같이 끌려 돈다.
+           z 오프셋은 0 이다 — 메시가 도면 z 를 그대로 쓰므로 윗부분이 저절로
+           0.384~0.454 에 놓이고 상면이 덱 하면(0.454)과 맞는다. -->
+      <parent link="body_link"/>
+      <child  link="${prefix}_upper_link"/>
+      <origin xyz="${xsign * end_turn_x} 0 0" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="${-pi}" upper="${pi}" effort="8000" velocity="${turn_vel}"/>
+      <dynamics damping="${turn_damping}" friction="${turn_friction}"/>
+    </joint>
+
+    <!-- ── 아랫부분: 시저로 바닥까지 내려간다 ──
+         q=0 → 궤도 하면이 통로 바닥. + 로 올린다.
+         궤도 하단은 메시 z=0, 바퀴부 접지면은 메시 z=wheel_unit_z0 이므로
+         낙차 end_drop 에서 그 8 mm 를 빼야 바닥에 정확히 닿는다. -->
+    <link name="${prefix}_lower_link">
+      <visual>
+        <geometry><mesh filename="${mesh_dir}/${prefix}_lower.stl"/></geometry>
+        <material name="light"/>
+      </visual>
+      <!-- 궤도 **위쪽**만 충돌시킨다. 접지는 아래 롤러가 맡아야 하므로
+           롤러 중심(end_axle_z)보다 위에서 시작한다. -->
+      <collision>
+        <origin xyz="0 0 ${(end_axle_z + 0.01 + end_lower_z1)/2.0}"/>
+        <geometry>
+          <box size="${2*end_lower_x} ${2*end_lower_y}
+                     ${end_lower_z1 - end_axle_z - 0.01}"/>
+        </geometry>
+      </collision>
+      <xacro:box_inertia m="${end_lower_mass}" x="${2*end_lower_x}" y="${2*end_lower_y}"
+                         z="${end_lower_z1}" oz="${end_lower_z1/2.0}"/>
+    </link>
+
+    <joint name="${prefix}_lift_joint" type="prismatic">
+      <parent link="${prefix}_upper_link"/>
+      <child  link="${prefix}_lower_link"/>
+      <origin xyz="0 0 ${-(end_drop - wheel_unit_z0)}" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <!-- 음수 = 잭업 (params.xacro 의 end_lift_down 참조) -->
+      <limit lower="${-end_lift_down}" upper="${end_lift_up}" effort="40000" velocity="0.2"/>
+      <dynamics damping="4000.0" friction="400.0"/>
+    </joint>
+
+    <!-- ── 시저: 윗부분 하면에 고정핀을 박고 **아래로** 자란다 ──
+         rpy="pi 0 0" 로 스택을 뒤집는다. 고정핀이 움직이지 않는 윗부분에 있고
+         미끄럼단이 아래(아랫부분 쪽)에 오는, 실제 매달림 리프트와 같은 배치다.
+         스택 높이 = ext(q) = end_sc_ext_hi − q 이므로 끝단이 전 행정에서
+         아랫부분 상면(end_lower_z1)에 정확히 닿는다. 검산은 docs/robot.md 참조. -->
+    <xacro:scissor_stack ns="${prefix}_sc" parent="${prefix}_upper_link"
+                         xyz="${end_sc_x} 0 ${end_upper_z0}" rpy="${pi} 0 0"
+                         blen="${end_sc_len}" dy="${end_sc_dy}" dy2="${end_sc_dy2}"
+                         n="${end_sc_n}" ty="${end_sc_ty}" tz="${end_sc_tz}"/>
+
+    <!-- 접지 롤러 — 끝단 궤도를 대신한다. 구동하지 않고 굴러가기만 한다.
+         **아랫부분에 붙는다** (윗부분이 아니다 — 바닥에 닿는 것은 아랫부분이다). -->
+    <xacro:macro name="end_roller" params="rprefix ysign xoff">
+      <link name="${rprefix}_roller_link">
+        <collision>
+          <origin rpy="${pi/2} 0 0"/>
+          <geometry>
+            <cylinder radius="${end_wheel_radius}" length="${end_track_width}"/>
+          </geometry>
+        </collision>
+        <xacro:cylinder_inertia m="${wheel_mass}" r="${end_wheel_radius}"
+                                h="${end_track_width}"/>
+      </link>
+      <joint name="${rprefix}_roller_joint" type="continuous">
+        <parent link="${prefix}_lower_link"/>
+        <child  link="${rprefix}_roller_link"/>
+        <origin xyz="${xoff} ${ysign * end_track_gauge / 2.0} ${end_axle_z}"/>
+        <axis xyz="0 1 0"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:end_roller rprefix="${prefix}_fl" ysign="1"  xoff="${ end_wheel_x}"/>
+    <xacro:end_roller rprefix="${prefix}_fr" ysign="-1" xoff="${ end_wheel_x}"/>
+    <xacro:end_roller rprefix="${prefix}_bl" ysign="1"  xoff="${-end_wheel_x}"/>
+    <xacro:end_roller rprefix="${prefix}_br" ysign="-1" xoff="${-end_wheel_x}"/>
+  </xacro:macro>
+
+  <xacro:end_unit prefix="front" xsign="1"/>
+  <xacro:end_unit prefix="rear"  xsign="-1"/>
+
+  <!-- ═══════════ IMU (Livox Mid-360 내장) ═══════════
+       ⚠ **바퀴부(base_link)에 붙인다. 몸체부가 아니다.**
+         몸체부는 /body_turn 으로 돌아가므로, 거기 붙이면 IMU 가 측정하는 방위각이
+         **주행체의 방위각이 아니게 된다** — 몸체부를 90도 돌리면 IMU 도 90도 돈다.
+         자기위치 추정이 추정하려는 것은 **론지를 따라 움직이는 바퀴부의 자세**이므로
+         회전하지 않는 바퀴부에 실어야 한다.
+         (처음엔 상판에 뒀었다. 회전 메커니즘이 들어오면서 틀린 자리가 됐다.)
+
+       위치는 바퀴부 중심 — 레버암(회전 중심에서의 거리)이 0 에 가까울수록
+       각가속도가 가속도계에 섞여 들어오는 오차가 작다. -->
+  <link name="imu_link">
+    <visual>
+      <geometry><box size="0.06 0.06 0.04"/></geometry>
+      <material name="light"/>
+    </visual>
+    <xacro:box_inertia m="0.3" x="0.06" y="0.06" z="0.04"/>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="${imu_xyz}" rpy="${imu_rpy}"/>
+  </joint>
+
+  <!-- ═══════════ Gazebo 플러그인/센서 ═══════════ -->
+  <xacro:crawler_gazebo/>
+
+</robot>

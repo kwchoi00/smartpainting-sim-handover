@@ -1,0 +1,149 @@
+# ros_gz_bridge 토픽 매핑 — **로봇 토픽 전용** (ROS2 Jazzy / Gazebo Harmonic)
+#
+# 이 브리지는 sim.launch.py 의 robot 인자에 걸려 있다. 로봇이 없으면 안 뜬다.
+# /clock 은 로봇과 무관한 월드 토픽이라 bridge_clock.yaml 로 분리했다 —
+# 여기 두면 로봇이 없을 때 use_sim_time 이 통째로 죽는다.
+#
+# ⚠ /tf_gz 는 일부러 브리지하지 않는다.
+#   DiffDrive 가 내는 odom→base_footprint TF 와
+#   robot_localization EKF 가 내는 같은 TF 가 충돌하기 때문.
+#   EKF 도입 전 RViz 확인용으로 필요하면 sim.launch.py 의
+#   publish_gz_tf:=true 로 켤 수 있다 (별도 브리지 노드로 처리).
+
+- ros_topic_name: "/cmd_vel"
+  gz_topic_name: "/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+
+# 휠 오도메트리 — 추정 입력. slip 주입 대상.
+- ros_topic_name: "/odom"
+  gz_topic_name: "/odom"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# 참값 — 평가 전용. 추정 알고리즘에 절대 넣지 말 것.
+- ros_topic_name: "/ground_truth"
+  gz_topic_name: "/ground_truth"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/imu"
+  gz_topic_name: "/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+# ─── 관절 지령 ────────────────────────────────────────────
+# 전부 위치 지령이고 **q=0 이 론지 주행 자세**다.
+#   /front_lift /rear_lift : 끝단부 상하 [m]. 0 = 바닥에 닿음, + 로 들어올린다
+#   /front_turn /rear_turn : 끝단부 회전 [rad]
+#   /body_lift  /body_turn : 바퀴부 위 상판 상하[m] / 회전[rad]
+#   /rail_cmd              : 리니어축 위치 [m]. 0 = 행정 중심, ±1.75 = 끝
+#
+#   ros2 topic pub -1 /front_lift std_msgs/msg/Float64 "{data: 0.45}"
+
+- ros_topic_name: "/front_lift"
+  gz_topic_name: "/front_lift"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/rear_lift"
+  gz_topic_name: "/rear_lift"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/front_turn"
+  gz_topic_name: "/front_turn"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/rear_turn"
+  gz_topic_name: "/rear_turn"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/body_lift"
+  gz_topic_name: "/body_lift"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/body_turn"
+  gz_topic_name: "/body_turn"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/rail_cmd"
+  gz_topic_name: "/rail_cmd"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+# ─── 팔 6축 (FANUC CRX-20iA/L) ────────────────────────────
+# 캐리지 위 팔의 관절 위치 [rad]. 관절값 0 은 곧게 선 자세다.
+#   ros2 topic pub -1 /arm_j2 std_msgs/msg/Float64 "{data: 1.5708}"
+
+- ros_topic_name: "/arm_j1"
+  gz_topic_name: "/arm_j1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/arm_j2"
+  gz_topic_name: "/arm_j2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/arm_j3"
+  gz_topic_name: "/arm_j3"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/arm_j4"
+  gz_topic_name: "/arm_j4"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/arm_j5"
+  gz_topic_name: "/arm_j5"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+- ros_topic_name: "/arm_j6"
+  gz_topic_name: "/arm_j6"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+# ─── 시저 링키지 관절 궤적 ─────────────────────────────────
+# `scissor_driver` 노드가 내는 **종동체 지령**이다. 사람이 쏠 일은 없다.
+# 시저 관절 20개를 메시지 하나로 묶는다 — 20관절이 한 틱에 함께 움직여야
+# X자가 어긋나 보이지 않는다 (성능은 토픽을 나눠도 같다).
+# 시저는 닫힌 루프라 URDF 로 못 쓰고, dartsim 이 mimic 을 지원하지 않아
+# 이렇게 위치제어로 따라가게 한다 — 자세한 이유는 scissor_driver.py 참조.
+# 이 브리지가 없으면 X자가 접힌 채(θ=0) 있을 뿐, 주행·추정은 영향이 없다.
+
+- ros_topic_name: "/scissor/traj"
+  gz_topic_name: "/scissor/traj"
+  ros_type_name: "trajectory_msgs/msg/JointTrajectory"
+  gz_type_name: "gz.msgs.JointTrajectory"
+  direction: ROS_TO_GZ
+
+# 관절 엔코더 — 상하·회전·리니어축은 휠 오도메트리로 알 수 없다.
+- ros_topic_name: "/joint_states"
+  gz_topic_name: "/joint_states"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
