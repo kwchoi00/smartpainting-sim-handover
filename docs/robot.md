@@ -399,7 +399,7 @@ ros2 run sp_gazebo patrol.py --dry-run                # 순서만 출력
 아랫부분을 내렸을 때 늘어나지 않고 허공에 남는다. 바퀴부 도면 체인을 뺀 것과
 같은 이유이고, 같은 자리에 파라메트릭 X자 바를 세워 대체한다.
 
-**메시는 저장소에 없다** (`.gitignore` — STEP 에서 뽑는다). 새로 받으면 한 번 돌린다:
+**메시는 STEP 에서 뽑아 저장소에 커밋해 뒀다.** 도면이 바뀌면 다시 돌리고 커밋한다:
 
 ```bash
 python3 src/sp_gazebo/scripts/step_to_robot.py \

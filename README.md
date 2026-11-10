@@ -56,19 +56,36 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-⚠ **블록·로봇 메시(STL)는 리포에 없다** (수십 MB). 빌드 전에 원본 STEP 도면에서 뽑아야
-로봇과 도면 월드가 보인다. 원본 STEP 은 `cad/` 에 있다.
+**도면 변환은 이미 해서 넣어 뒀다.** clone → build 만 하면 로봇과 실 도면 월드가 바로 뜬다.
+
+| 원본 STEP (`cad/`) | 변환 결과 (커밋돼 있음) |
+| --- | --- |
+| `STANDARD BLOCK ASSY.stp` — 블록 (2026-08-14 재출도) | `src/sp_gazebo/models/ship_block_cad/meshes/` `visual.stl` · `collision.stl` |
+| `모바일 로봇 ASSY.stp` — 로봇 6안 | `src/sp_description/meshes/*.stl` (링크별) |
+| `old/240305_STANDARD BLOCK ASSY.stp` — 구 블록 도면 | 변환 안 함 (비교용 보관) |
+
+설치 확인 — 실 도면 월드에 로봇을 띄워 본다:
 
 ```bash
-# 로봇 (모바일 로봇 ASSY.stp → src/sp_description/meshes/*.stl). STEP 파싱에 13분쯤 걸린다
-python3 src/sp_gazebo/scripts/step_to_robot.py "cad/모바일 로봇 ASSY.stp" -o src/sp_description
-# 블록 (STANDARD BLOCK ASSY.stp → src/sp_gazebo/models/ship_block_cad/meshes/)
+ros2 launch sp_gazebo sim.launch.py world:=ship_block_cad_world \
+    x:=-2.68 y:=-0.8775 z:=0.53
+ros2 topic echo /ground_truth --once     # z ≈ 0.520 (론지 플랜지 상면) 이면 정상
+```
+
+### 도면이 바뀌었을 때만 — 다시 변환
+
+```bash
+pip install gmsh
+# 로봇 → src/sp_description/meshes/*.stl  (STEP 파싱에 10분 넘게 걸린다)
+python3 src/sp_gazebo/scripts/step_to_robot.py "cad/모바일 로봇 ASSY.stp" -o src/sp_description --proxy
+# 블록 → src/sp_gazebo/models/ship_block_cad/meshes/
 python3 src/sp_gazebo/scripts/step_to_gazebo.py "cad/STANDARD BLOCK ASSY.stp" \
         -o src/sp_gazebo --scale 0.001 --up-axis y --visual-size 0.30
 ```
 
-자세한 옵션은 [docs/world.md](docs/world.md), [docs/robot.md](docs/robot.md) 참조.
-파라메트릭 월드(`ship_block_mockup` / `ship_block_full` / `ship_block_drift`)는 블록 메시 없이 뜬다.
+⚠ 블록 도면은 Y-up · mm 단위라 `--up-axis y --scale 0.001` 을 반드시 준다.
+⚠ 블록 변환은 `model.sdf` 와 `worlds/ship_block_cad_world.sdf` 도 다시 쓴다 — `git diff` 로 확인할 것.
+뽑은 메시는 커밋한다. 자세한 옵션은 [docs/world.md](docs/world.md), [docs/robot.md](docs/robot.md) 참조.
 
 ## 실행 — 터미널 4개
 
@@ -253,11 +270,11 @@ src/
 │   ├── urdf/params.xacro          치수·IMU 노이즈 등 파라미터 (전부 여기 모여 있다)
 │   ├── urdf/crawler.urdf.xacro    링크·관절 구조
 │   ├── urdf/crawler.gazebo.xacro  gz 플러그인 (DiffDrive, IMU, 관절 제어)
-│   └── meshes/                    ← step_to_robot.py 가 채운다 (git 제외)
+│   └── meshes/                    로봇 링크별 STL (step_to_robot.py 로 뽑아 커밋)
 ├── sp_gazebo/          월드·런치·브리지·동작 스크립트
 │   ├── config/block_*.yaml         파라메트릭 블록 형상
 │   ├── config/gui_cad_world.config GUI 카메라(블록 안쪽) 설정
-│   ├── models/ship_block_cad/      도면 블록 모델 (meshes/ 는 git 제외)
+│   ├── models/ship_block_cad/      도면 블록 모델 + meshes/ (step_to_gazebo.py 로 뽑아 커밋)
 │   ├── worlds/                     cad_world / drift / full / mockup
 │   ├── scripts/step_to_gazebo.py   블록 STEP → 정적 Gazebo 모델
 │   ├── scripts/step_to_robot.py    로봇 STEP → 링크별 STL

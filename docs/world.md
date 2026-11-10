@@ -62,7 +62,7 @@ visual 은 보기용이라 크게 잡아도 물리에 영향이 없다.
 src/sp_gazebo/
 ├── models/ship_block_cad/
 │   ├── model.sdf  model.config     ← 커밋됨
-│   └── meshes/visual.stl           ← gitignore. STEP 에서 재생성
+│   └── meshes/visual.stl           ← STEP 에서 뽑아 커밋해 둠
 │       meshes/collision.stl
 └── worlds/ship_block_cad_world.sdf ← 커밋됨
 ```
