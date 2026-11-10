@@ -9,11 +9,11 @@
 pip install gmsh          # venv 안에서. Ubuntu 24.04 는 시스템 pip 이 막혀 있다
 
 # 1) 변환
-python3 src/sp_gazebo/scripts/step_to_gazebo.py "STANDARD BLOCK ASSY.stp" \
+python3 src/sp_gazebo/scripts/step_to_gazebo.py "cad/STANDARD BLOCK ASSY.stp" \
         -o src/sp_gazebo --scale 0.001 --up-axis y --visual-size 0.30
 
 # 2) 어디에 스폰할지 확인 (데크 개구부 때문에 반드시 필요)
-python3 src/sp_gazebo/scripts/inspect_block.py "STANDARD BLOCK ASSY.stp" \
+python3 src/sp_gazebo/scripts/inspect_block.py "cad/STANDARD BLOCK ASSY.stp" \
         --scale 0.001 --up-axis y --robot-width 0.63 --no-map
 
 # 3) 실행
@@ -80,9 +80,9 @@ Autodesk Inventor 2025, AP214, **mm 단위**, 부품 13개 / 솔리드 46개.
 > 자동 추정도 mm 로 맞히지만, 실척이 중요한 값이므로 명시해서 추정에 맡기지 않는다.
 
 ```bash
-python3 src/sp_gazebo/scripts/step_to_gazebo.py "STANDARD BLOCK ASSY.stp" \
+python3 src/sp_gazebo/scripts/step_to_gazebo.py "cad/STANDARD BLOCK ASSY.stp" \
         -o src/sp_gazebo --scale 0.001 --up-axis y --visual-size 0.30
-python3 src/sp_gazebo/scripts/inspect_block.py "STANDARD BLOCK ASSY.stp" \
+python3 src/sp_gazebo/scripts/inspect_block.py "cad/STANDARD BLOCK ASSY.stp" \
         --scale 0.001 --up-axis y --robot-width 0.63 --no-map
 ros2 launch sp_gazebo sim.launch.py world:=ship_block_cad_world x:=-2.68 y:=-0.8775 z:=0.53
 ```

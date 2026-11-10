@@ -57,13 +57,13 @@ source install/setup.bash
 ```
 
 ⚠ **블록·로봇 메시(STL)는 리포에 없다** (수십 MB). 빌드 전에 원본 STEP 도면에서 뽑아야
-로봇과 도면 월드가 보인다. 원본 STEP 은 리포 밖에서 관리하므로 전임자에게 따로 받을 것.
+로봇과 도면 월드가 보인다. 원본 STEP 은 `cad/` 에 있다.
 
 ```bash
 # 로봇 (모바일 로봇 ASSY.stp → src/sp_description/meshes/*.stl). STEP 파싱에 13분쯤 걸린다
-python3 src/sp_gazebo/scripts/step_to_robot.py "모바일 로봇 ASSY.stp" -o src/sp_description
+python3 src/sp_gazebo/scripts/step_to_robot.py "cad/모바일 로봇 ASSY.stp" -o src/sp_description
 # 블록 (STANDARD BLOCK ASSY.stp → src/sp_gazebo/models/ship_block_cad/meshes/)
-python3 src/sp_gazebo/scripts/step_to_gazebo.py "STANDARD BLOCK ASSY.stp" \
+python3 src/sp_gazebo/scripts/step_to_gazebo.py "cad/STANDARD BLOCK ASSY.stp" \
         -o src/sp_gazebo --scale 0.001 --up-axis y --visual-size 0.30
 ```
 
@@ -276,6 +276,7 @@ src/
     ├── lap_eval.py        한 바퀴 평가 / live_monitor.py 실시간 창
     ├── plot_paths.py      CSV → 4칸 그래프
     └── launch/eskf.launch.py
+cad/                    원본 STEP 도면 (현재 블록·로봇 6안, old/ 는 구 블록 도면)
 tools/                  계측·분석 일회성 스크립트 (빌드에 안 들어간다)
 docs/                   주제별 상세 기록
 ```
@@ -311,7 +312,7 @@ docs/                   주제별 상세 기록
 
 | 무엇 | 상태 |
 | --- | --- |
-| 블록 `240305_STANDARD BLOCK ASSY.stp` (구) | 사용 안 함 — 신 도면과의 차이는 [docs/world.md](docs/world.md#구-도면240305_standard-block-assystp-과의-차이) |
+| 블록 `240305_STANDARD BLOCK ASSY.stp` (구) | 사용 안 함, `cad/old/` 에 보관 — 신 도면과의 차이는 [docs/world.md](docs/world.md#구-도면240305_standard-block-assystp-과의-차이) |
 | 블록 `STANDARD BLOCK ASSY.stp` (2026-08-14 재출도) | **현재 사용** |
 | 로봇 — 론지 걸터타기 크롤러 (초기 가설 모델) | 제거됨. 도면이 아니라 가설이었다 |
 | 로봇 `모바일 로봇 ASSY.stp` (6안, 2026-08-14) | **현재 사용** (`sp_description`) |

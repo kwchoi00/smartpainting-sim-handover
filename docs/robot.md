@@ -403,7 +403,7 @@ ros2 run sp_gazebo patrol.py --dry-run                # 순서만 출력
 
 ```bash
 python3 src/sp_gazebo/scripts/step_to_robot.py \
-    "~/3D/모바일 로봇 ASSY.stp" -o src/sp_description --proxy
+    "cad/모바일 로봇 ASSY.stp" -o src/sp_description --proxy
 ```
 
 `front_upper` `front_lower` `rear_upper` `rear_lower` 네 개가 나온다
